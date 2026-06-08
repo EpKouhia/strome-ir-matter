@@ -6,6 +6,13 @@ The device exposes a Matter Room Air Conditioner endpoint and transmits Trotec 3
 
 Note: This project is still a work in progress. Some parts of the code and documentation have been refactored with AI assistance.
 
+## TODO
+
+- Swing control
+- Timer control
+- Fan speed control
+- Addition of Dry and Fan modes
+
 ## Home Assistant Matter Device
 
 These screenshots show the added Matter device in Home Assistant. The detailed view exposes the measured local temperature, cooling setpoint, and Cool mode control.
