@@ -1,0 +1,40 @@
+# ESP-IDF build outputs
+build/
+build_*/
+build-*/
+build.*/
+build*/
+managed_components/
+dependencies.lock.tmp
+
+# Firmware/build artifacts that should only appear inside build directories
+*.bin
+*.elf
+*.map
+*.hex
+*.uf2
+*.lst
+
+# Generated/transient config and logs
+sdkconfig.old
+sdkconfig.bak
+sdkconfig.tmp
+build_output.log
+*.log
+compile_commands.json
+project_description.json
+flasher_args.json
+flash_args
+flash_args.in
+
+# Python/tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor/OS noise
+.agents/
+.codex/
+.vscode/
+.idea/
+.DS_Store
