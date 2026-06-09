@@ -1,6 +1,6 @@
-# Sröme AC YPS-12C IR Implementation
+# Ströme AC YPS-12C IR Implementation
 
-This project implements Sröme AC YPS-12C IR control using the Trotec 3550-compatible protocol.
+This project implements Ströme AC YPS-12C IR control using the Trotec 3550-compatible protocol.
 It uses manual GPIO carrier generation on ESP32-C6 because this was validated against the actual AC unit and proved more reliable than RMT for this protocol.
 Payload and IR signal debugging were performed with Arduino and [AnalysIR](https://github.com/AnalysIR) tooling to verify the control data and packet structure.
 The protocol data is capture-derived from the original remote, so the payload fields and timings should be treated as empirically validated rather than a complete manufacturer specification.
@@ -21,7 +21,7 @@ The protocol data is capture-derived from the original remote, so the payload fi
 
 ## Protocol
 
-The Sröme AC YPS-12C uses a Trotec 3550-compatible state-based protocol: every command transmits the complete AC state.
+The Ströme AC YPS-12C uses a Trotec 3550-compatible state-based protocol: every command transmits the complete AC state.
 
 - Encoding: Pulse-distance
 - Data length: 72 bits, 9 bytes
@@ -60,7 +60,7 @@ Known reserved bits are preserved from IRremoteESP8266's Trotec 3550 reset frame
 1. Use an IR receiver or logic analyzer to capture GPIO21 output through the IR LED driver.
 2. Confirm the captured frame is 72 bits, MSB first per byte, with the timings above.
 3. Verify the checksum equals the 8-bit sum of the first 8 bytes.
-4. Test with the Sröme AC YPS-12C for power, mode, fan, swing, and temperature changes.
+4. Test with the Ströme AC YPS-12C for power, mode, fan, swing, and temperature changes.
 
 The transmitter logs the generated frame:
 
@@ -73,4 +73,4 @@ I (...) trotec_3550_ir: TX state: power=on mode=3 fan=2 swing=0 temp=24.00C fram
 1. **No IR output**: Check GPIO21 wiring and the transistor/MOSFET driver.
 2. **Weak range**: Increase LED current within safe limits or use multiple LEDs.
 3. **Timing mismatch**: Capture with a logic analyzer and compare against the protocol timings.
-4. **AC does not respond**: Verify the AC is a Sröme AC YPS-12C or Trotec 3550-compatible model and compare the emitted bytes with the original remote.
+4. **AC does not respond**: Verify the AC is a Ströme AC YPS-12C or Trotec 3550-compatible model and compare the emitted bytes with the original remote.

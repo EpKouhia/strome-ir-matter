@@ -62,3 +62,7 @@ CONFIG_SUPPORT_ICD_MANAGEMENT_CLUSTER=n
 
 # Use the project commissionable data provider so the QR/manual code and PASE verifier match.
 CONFIG_CUSTOM_COMMISSIONABLE_DATA_PROVIDER=y
+
+# Use project Basic Information values instead of CHIP example TEST_* strings.
+# CONFIG_EXAMPLE_DEVICE_INSTANCE_INFO_PROVIDER is not set
+CONFIG_CUSTOM_DEVICE_INSTANCE_INFO_PROVIDER=y

@@ -9,10 +9,13 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <inttypes.h>
 #include <nvs_flash.h>
 #include <string.h>
 
 #include <driver/gpio.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
@@ -31,6 +34,7 @@
 
 #include <platform/ESP32/ESP32Config.h>
 #include <platform/CommissionableDataProvider.h>
+#include <platform/DeviceInstanceInfoProvider.h>
 #include <app/server/CommissioningWindowManager.h>
 #include <app/server/Dnssd.h>
 #include <app/server/Server.h>
@@ -96,17 +100,36 @@ static constexpr uint32_t kNetworkCommissioningConnectMaxTimeSecondsAttributeId 
 static constexpr int16_t kInitialLocalTemperature = 2000; // 20.0 C until the DS18B20 task reports a valid reading.
 static constexpr uint16_t kThermostatRunningStateCool = 0x0002;
 static char s_empty_string[] = "";
-static char s_vendor_name[] = "Sröme";
-static char s_product_name[] = "Sröme AC";
+static char s_vendor_name[] = "Ströme";
+static char s_product_name[] = "Ströme AC";
 static char s_model_name[] = "YPS-12C";
 static char s_product_url[] = "https://github.com/EpKouhia/strome-ir-matter";
 static char s_serial_number[] = "strome-ir-matter-dev";
+static constexpr uint32_t kVendorId = 0xFFF1;  // CSA test VID used with development attestation.
+static constexpr uint32_t kProductId = 0x8000; // Development PID from sdkconfig.
+static constexpr uint32_t kHardwareVersion = 1;
 static constexpr uint32_t kSetupPasscodeBase = 10000000;
 static constexpr uint32_t kSetupPasscodeRange = 89999999;
 static constexpr uint32_t kSpake2pIterationCount = 1000;
 static constexpr uint8_t kSpake2pSalt[] = "SPAKE2P Key Salt";
 static constexpr gpio_num_t kRfSwitchEnableGpio = GPIO_NUM_3;
 static constexpr gpio_num_t kRfSwitchSelectGpio = GPIO_NUM_14;
+static constexpr gpio_num_t kPairingModeButtonGpio = GPIO_NUM_1;
+static constexpr gpio_num_t kPairingModeLedGpio = GPIO_NUM_15;
+static constexpr int kPairingModeButtonActiveLevel = 0;
+static constexpr int kPairingModeLedOnLevel = 1;
+static constexpr uint32_t kPairingModeReleaseWaitMs = 30000;
+static constexpr uint32_t kPairingModePollMs = 50;
+static constexpr uint32_t kPairingModeBlinkMs = 500;
+static constexpr uint32_t kPairingModeFactoryResetHoldMs = 15000;
+static constexpr uint32_t kPairingModeFactoryResetBlinkMs = 120;
+static constexpr uint8_t kPairingModeFactoryResetBlinkCount = 5;
+
+static volatile bool s_pairing_led_blinking = false;
+static volatile bool s_boot_pairing_window_pending = false;
+static TaskHandle_t s_pairing_led_task = nullptr;
+static TaskHandle_t s_pairing_button_task = nullptr;
+static TaskHandle_t s_boot_pairing_task = nullptr;
 
 static esp_err_t configure_rf_switch_antenna()
 {
@@ -132,6 +155,232 @@ static esp_err_t configure_rf_switch_antenna()
              gpio_get_level(kRfSwitchEnableGpio),
              gpio_get_level(kRfSwitchSelectGpio));
     return ESP_OK;
+}
+
+static void set_pairing_mode_led(bool on)
+{
+    gpio_set_level(kPairingModeLedGpio, on ? kPairingModeLedOnLevel : !kPairingModeLedOnLevel);
+}
+
+static void pairing_mode_led_task(void *)
+{
+    bool led_on = false;
+
+    while (true) {
+        if (s_pairing_led_blinking) {
+            led_on = !led_on;
+            set_pairing_mode_led(led_on);
+            vTaskDelay(pdMS_TO_TICKS(kPairingModeBlinkMs));
+        } else {
+            led_on = false;
+            set_pairing_mode_led(false);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+}
+
+static void start_pairing_mode_led()
+{
+    if (!s_pairing_led_task) {
+        BaseType_t task_created = xTaskCreate(pairing_mode_led_task, "pairing_led", 2048, nullptr, 1,
+                                              &s_pairing_led_task);
+        if (task_created != pdPASS) {
+            ESP_LOGE(TAG, "Failed to start pairing mode LED task");
+            s_pairing_led_task = nullptr;
+            return;
+        }
+    }
+
+    s_pairing_led_blinking = true;
+}
+
+static void stop_pairing_mode_led()
+{
+    s_pairing_led_blinking = false;
+    set_pairing_mode_led(false);
+}
+
+static void stop_pairing_mode_led_task()
+{
+    s_pairing_led_blinking = false;
+    if (s_pairing_led_task) {
+        vTaskDelete(s_pairing_led_task);
+        s_pairing_led_task = nullptr;
+    }
+    set_pairing_mode_led(false);
+}
+
+static void flash_pairing_mode_led(uint8_t blink_count, uint32_t interval_ms)
+{
+    stop_pairing_mode_led_task();
+
+    for (uint8_t i = 0; i < blink_count; ++i) {
+        set_pairing_mode_led(true);
+        vTaskDelay(pdMS_TO_TICKS(interval_ms));
+        set_pairing_mode_led(false);
+        vTaskDelay(pdMS_TO_TICKS(interval_ms));
+    }
+}
+
+static esp_err_t configure_pairing_mode_io()
+{
+    gpio_config_t button_conf = {
+        .pin_bit_mask = (1ULL << kPairingModeButtonGpio),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    esp_err_t err = gpio_config(&button_conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure pairing mode button GPIO%d, err=%d", kPairingModeButtonGpio, err);
+        return err;
+    }
+
+    gpio_config_t led_conf = {
+        .pin_bit_mask = (1ULL << kPairingModeLedGpio),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    err = gpio_config(&led_conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure pairing mode LED GPIO%d, err=%d", kPairingModeLedGpio, err);
+        return err;
+    }
+
+    set_pairing_mode_led(false);
+    return ESP_OK;
+}
+
+static bool is_pairing_mode_button_pressed()
+{
+    return gpio_get_level(kPairingModeButtonGpio) == kPairingModeButtonActiveLevel;
+}
+
+static void open_pairing_window_from_boot_button()
+{
+    chip::CommissioningWindowManager &commission_mgr = chip::Server::GetInstance().GetCommissioningWindowManager();
+    constexpr auto kTimeoutSeconds = chip::System::Clock::Seconds16(k_timeout_seconds);
+
+    if (commission_mgr.IsCommissioningWindowOpen()) {
+        ESP_LOGI(TAG, "Pairing mode requested; commissioning window is already open");
+        start_pairing_mode_led();
+        return;
+    }
+
+    CHIP_ERROR err = commission_mgr.OpenBasicCommissioningWindow(kTimeoutSeconds,
+                            chip::CommissioningWindowAdvertisement::kAllSupported);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to open boot-requested commissioning window, err:%" CHIP_ERROR_FORMAT, err.Format());
+        stop_pairing_mode_led();
+        return;
+    }
+
+    ESP_LOGI(TAG, "Boot-requested pairing mode opened for %d seconds", k_timeout_seconds);
+}
+
+static void boot_pairing_mode_task(void *)
+{
+    uint32_t waited_ms = 0;
+
+    while (is_pairing_mode_button_pressed() && waited_ms < kPairingModeReleaseWaitMs) {
+        vTaskDelay(pdMS_TO_TICKS(kPairingModePollMs));
+        waited_ms += kPairingModePollMs;
+    }
+
+    if (is_pairing_mode_button_pressed()) {
+        ESP_LOGW(TAG, "Pairing mode button still held after %lu ms; opening commissioning window once anyway",
+                 static_cast<unsigned long>(kPairingModeReleaseWaitMs));
+    } else {
+        ESP_LOGI(TAG, "Pairing mode button released; opening commissioning window");
+    }
+
+    open_pairing_window_from_boot_button();
+    s_boot_pairing_window_pending = false;
+    s_boot_pairing_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
+static void start_boot_pairing_mode_task()
+{
+    if (!s_boot_pairing_window_pending || s_boot_pairing_task) {
+        return;
+    }
+
+    BaseType_t task_created = xTaskCreate(boot_pairing_mode_task, "boot_pairing", 4096, nullptr, 1,
+                                          &s_boot_pairing_task);
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start boot pairing mode task");
+        s_boot_pairing_task = nullptr;
+        s_boot_pairing_window_pending = false;
+        stop_pairing_mode_led();
+    }
+}
+
+static void pairing_mode_button_task(void *)
+{
+    uint32_t held_ms = 0;
+    bool armed = !is_pairing_mode_button_pressed();
+
+    if (!armed) {
+        ESP_LOGI(TAG, "Pairing button monitor waiting for GPIO%d release before arming reset gesture",
+                 kPairingModeButtonGpio);
+    }
+
+    while (true) {
+        if (!armed) {
+            if (!is_pairing_mode_button_pressed()) {
+                armed = true;
+                ESP_LOGI(TAG, "Pairing button reset gesture armed");
+            }
+            vTaskDelay(pdMS_TO_TICKS(kPairingModePollMs));
+            continue;
+        }
+
+        if (is_pairing_mode_button_pressed()) {
+            held_ms += kPairingModePollMs;
+            if (held_ms == kPairingModePollMs) {
+                ESP_LOGI(TAG, "Pairing button pressed after boot; hold for %lu ms to factory reset Matter data",
+                         static_cast<unsigned long>(kPairingModeFactoryResetHoldMs));
+            }
+
+            if (held_ms >= kPairingModeFactoryResetHoldMs) {
+                ESP_LOGW(TAG, "Pairing button held for %lu ms; factory resetting Matter commissioning data",
+                         static_cast<unsigned long>(kPairingModeFactoryResetHoldMs));
+                flash_pairing_mode_led(kPairingModeFactoryResetBlinkCount, kPairingModeFactoryResetBlinkMs);
+                esp_err_t err = esp_matter::factory_reset();
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Matter factory reset failed, err=%d", err);
+                    set_pairing_mode_led(false);
+                }
+                s_pairing_button_task = nullptr;
+                vTaskDelete(nullptr);
+            }
+        } else if (held_ms > 0) {
+            ESP_LOGI(TAG, "Pairing button released before factory reset threshold");
+            held_ms = 0;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(kPairingModePollMs));
+    }
+}
+
+static void start_pairing_mode_button_monitor()
+{
+    if (s_pairing_button_task) {
+        return;
+    }
+
+    BaseType_t task_created = xTaskCreate(pairing_mode_button_task, "pairing_btn", 3072, nullptr, 1,
+                                          &s_pairing_button_task);
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start pairing mode button monitor task");
+        s_pairing_button_task = nullptr;
+    }
 }
 
 static uint64_t get_factory_mac_id()
@@ -230,6 +479,93 @@ public:
 
 static StromeCommissionableDataProvider s_commissionable_data_provider;
 
+class StromeDeviceInstanceInfoProvider : public chip::DeviceLayer::DeviceInstanceInfoProvider {
+public:
+    CHIP_ERROR GetVendorName(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_vendor_name);
+    }
+
+    CHIP_ERROR GetVendorId(uint16_t &vendorId) override
+    {
+        vendorId = static_cast<uint16_t>(kVendorId);
+        return CHIP_NO_ERROR;
+    }
+
+    CHIP_ERROR GetProductName(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_product_name);
+    }
+
+    CHIP_ERROR GetProductId(uint16_t &productId) override
+    {
+        productId = static_cast<uint16_t>(kProductId);
+        return CHIP_NO_ERROR;
+    }
+
+    CHIP_ERROR GetPartNumber(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_model_name);
+    }
+
+    CHIP_ERROR GetProductURL(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_product_url);
+    }
+
+    CHIP_ERROR GetProductLabel(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_model_name);
+    }
+
+    CHIP_ERROR GetSerialNumber(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_serial_number);
+    }
+
+    CHIP_ERROR GetManufacturingDate(uint16_t &year, uint8_t &month, uint8_t &day) override
+    {
+        year = 2026;
+        month = 6;
+        day = 9;
+        return CHIP_NO_ERROR;
+    }
+
+    CHIP_ERROR GetHardwareVersion(uint16_t &hardwareVersion) override
+    {
+        hardwareVersion = static_cast<uint16_t>(kHardwareVersion);
+        return CHIP_NO_ERROR;
+    }
+
+    CHIP_ERROR GetHardwareVersionString(char *buf, size_t bufSize) override
+    {
+        return copy_string(buf, bufSize, s_model_name);
+    }
+
+    CHIP_ERROR GetRotatingDeviceIdUniqueId(chip::MutableByteSpan &uniqueIdSpan) override
+    {
+        static constexpr uint8_t unique_id[] = {
+            's', 't', 'r', 'o', 'm', 'e', '-', 'i',
+            'r', '-', 'm', 'a', 't', 't', 'e', 'r',
+        };
+        VerifyOrReturnError(uniqueIdSpan.size() >= sizeof(unique_id), CHIP_ERROR_BUFFER_TOO_SMALL);
+        memcpy(uniqueIdSpan.data(), unique_id, sizeof(unique_id));
+        uniqueIdSpan.reduce_size(sizeof(unique_id));
+        return CHIP_NO_ERROR;
+    }
+
+private:
+    static CHIP_ERROR copy_string(char *buf, size_t bufSize, const char *value)
+    {
+        size_t length = strlen(value);
+        VerifyOrReturnError(bufSize > length, CHIP_ERROR_BUFFER_TOO_SMALL);
+        memcpy(buf, value, length + 1);
+        return CHIP_NO_ERROR;
+    }
+};
+
+static StromeDeviceInstanceInfoProvider s_device_instance_info_provider;
+
 static void set_factory_string_if_needed(chip::DeviceLayer::Internal::ESP32Config::Key key, const char *name,
                                          const char *value)
 {
@@ -249,12 +585,32 @@ static void set_factory_string_if_needed(chip::DeviceLayer::Internal::ESP32Confi
     }
 }
 
+static void set_factory_u32_if_needed(chip::DeviceLayer::Internal::ESP32Config::Key key, const char *name,
+                                      uint32_t value)
+{
+    uint32_t current_value = 0;
+    CHIP_ERROR err = chip::DeviceLayer::Internal::ESP32Config::ReadConfigValue(key, current_value);
+    if (err == CHIP_NO_ERROR && current_value == value) {
+        return;
+    }
+
+    err = chip::DeviceLayer::Internal::ESP32Config::WriteConfigValue(key, value);
+    if (err == CHIP_NO_ERROR) {
+        ESP_LOGI(TAG, "Matter factory data: %s = %" PRIu32, name, value);
+    } else {
+        ESP_LOGW(TAG, "Failed to write Matter factory data %s: %" CHIP_ERROR_FORMAT, name, err.Format());
+    }
+}
+
 static void configure_matter_factory_data()
 {
     using chip::DeviceLayer::Internal::ESP32Config;
 
+    set_factory_u32_if_needed(ESP32Config::kConfigKey_VendorId, "VendorId", kVendorId);
     set_factory_string_if_needed(ESP32Config::kConfigKey_VendorName, "VendorName", s_vendor_name);
+    set_factory_u32_if_needed(ESP32Config::kConfigKey_ProductId, "ProductId", kProductId);
     set_factory_string_if_needed(ESP32Config::kConfigKey_ProductName, "ProductName", s_product_name);
+    set_factory_u32_if_needed(ESP32Config::kConfigKey_HardwareVersion, "HardwareVersion", kHardwareVersion);
     set_factory_string_if_needed(ESP32Config::kConfigKey_ProductLabel, "ProductLabel", s_model_name);
     set_factory_string_if_needed(ESP32Config::kConfigKey_PartNumber, "PartNumber", s_model_name);
     set_factory_string_if_needed(ESP32Config::kConfigKey_HardwareVersionString, "HardwareVersionString", s_model_name);
@@ -479,11 +835,13 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "🎉 COMMISSIONING COMPLETED SUCCESSFULLY! 🎉");
+        stop_pairing_mode_led();
         print_commissioning_status();
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
         ESP_LOGI(TAG, "❌ COMMISSIONING FAILED - Fail safe timer expired");
+        stop_pairing_mode_led();
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
@@ -500,6 +858,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
         ESP_LOGI(TAG, "🚪 COMMISSIONING WINDOW CLOSED");
+        stop_pairing_mode_led();
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
@@ -582,7 +941,7 @@ extern "C" void app_main()
     esp_err_t err = ESP_OK;
 
     ESP_LOGI(TAG, "🚀 MATTER APP STARTING UP");
-    ESP_LOGI(TAG, "📱 Sröme AC Controller - Version 1.0");
+    ESP_LOGI(TAG, "📱 Ströme AC Controller - Version 1.0");
     ESP_LOGI(TAG, "🏷️ Model: YPS-12C");
     ESP_LOGI(TAG, "🏠 Device Type: Room Air Conditioner (Always-On IR AC bridge)");
     ESP_LOGI(TAG, "⚙️ Features: Power, Cool/Off mode, Temperature setpoint");
@@ -591,6 +950,16 @@ extern "C" void app_main()
 
     err = configure_rf_switch_antenna();
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to configure RF switch antenna, err:%d", err));
+
+    err = configure_pairing_mode_io();
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to configure pairing mode GPIOs, err:%d", err));
+
+    if (is_pairing_mode_button_pressed()) {
+        s_boot_pairing_window_pending = true;
+        ESP_LOGI(TAG, "Pairing mode button GPIO%d held low at boot; startup will continue",
+                 kPairingModeButtonGpio);
+        start_pairing_mode_led();
+    }
 
     /* Initialize the ESP NVS layer */
     nvs_flash_init();
@@ -638,6 +1007,9 @@ extern "C" void app_main()
 
     /* This must be registered before esp_matter::start() so QR/manual code and PASE use the same passcode. */
     esp_matter::set_custom_commissionable_data_provider(&s_commissionable_data_provider);
+#if CONFIG_CUSTOM_DEVICE_INSTANCE_INFO_PROVIDER
+    esp_matter::set_custom_device_instance_info_provider(&s_device_instance_info_provider);
+#endif
 
     /* Matter start */
     err = esp_matter::start(app_event_cb);
@@ -650,6 +1022,10 @@ extern "C" void app_main()
     /* Print commissioning information */
     chip::BitFlags<chip::RendezvousInformationFlag> rendezvous(chip::RendezvousInformationFlag::kBLE);
     PrintOnboardingCodes(rendezvous);
+
+    start_boot_pairing_mode_task();
+
+    start_pairing_mode_button_monitor();
 
     /* Starting driver with default values */
     app_driver_room_air_conditioner_set_defaults(room_air_conditioner_endpoint_id);

@@ -274,7 +274,7 @@ static esp_err_t app_driver_room_air_conditioner_set_mode(esp_matter_attr_val_t 
     sync_power_mode_attributes();
     update_reported_temperature();
     sync_thermostat_operating_state();
-    ESP_LOGI(TAG, "Sröme AC Mode: %s (sysMode=%u)", mode_to_str(ac_state.mode), (unsigned)mode);
+    ESP_LOGI(TAG, "Ströme AC Mode: %s (sysMode=%u)", mode_to_str(ac_state.mode), (unsigned)mode);
     return trotec_3550_ir_send_state(&ac_state);
 }
 
@@ -286,7 +286,7 @@ static esp_err_t app_driver_room_air_conditioner_set_power(esp_matter_attr_val_t
     sync_power_mode_attributes();
     update_reported_temperature();
     sync_thermostat_operating_state();
-    ESP_LOGI(TAG, "Sröme AC Power: %s", ac_state.power_on ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Ströme AC Power: %s", ac_state.power_on ? "ON" : "OFF");
     return trotec_3550_ir_send_state(&ac_state);
 }
 

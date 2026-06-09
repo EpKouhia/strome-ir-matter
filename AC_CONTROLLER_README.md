@@ -1,6 +1,6 @@
-# Sröme AC Matter Controller
+# Ströme AC Matter Controller
 
-This project implements a Matter-compatible Room Air Conditioner controller for the Sröme AC YPS-12C using ESP32-Matter SDK. The controller exposes a conservative AC surface for power, Off/Cool mode, and cooling temperature, and sends Trotec 3550-compatible IR state frames to the AC unit.
+This project implements a Matter-compatible Room Air Conditioner controller for the Ströme AC YPS-12C using ESP32-Matter SDK. The controller exposes a conservative AC surface for power, Off/Cool mode, and cooling temperature, and sends Trotec 3550-compatible IR state frames to the AC unit.
 
 ## Features
 
@@ -15,7 +15,7 @@ This project implements a Matter-compatible Room Air Conditioner controller for 
 
 ### Matter Control Coverage
 
-The Sröme AC IR protocol is state-based, so every Matter control writes a complete IR payload containing power, mode, temperature, fan speed, swing, Celsius unit, and checksum. Fan speed and swing are currently held at firmware defaults instead of being exposed over Matter.
+The Ströme AC IR protocol is state-based, so every Matter control writes a complete IR payload containing power, mode, temperature, fan speed, swing, Celsius unit, and checksum. Fan speed and swing are currently held at firmware defaults instead of being exposed over Matter.
 
 | AC / IR Function | Matter Control | Firmware Status |
 |------------------|----------------|-----------------|
@@ -42,7 +42,7 @@ Note: Fan Control is intentionally not advertised in the first Room Air Conditio
 4. **Thermostat UI Configuration Cluster**: Basic thermostat UI metadata
 
 #### Device Configuration
-- **Matter Product Name**: Sröme AC
+- **Matter Product Name**: Ströme AC
 - **Model**: YPS-12C
 - **Device Type**: Room Air Conditioner
 - **Power Model**: Mains-powered, always-on Matter node. ICD server support is disabled; a small root compatibility shim is present for RainMaker Matter reads.
@@ -59,7 +59,7 @@ Note: Fan Control is intentionally not advertised in the first Room Air Conditio
 ### Core Files
 - `main/app_main.cpp`: Main application logic and Matter node setup
 - `main/app_driver.cpp`: AC control driver implementation and Matter attribute mapping
-- `main/trotec_3550_ir.cpp`: Sröme AC YPS-12C/Trotec 3550-compatible IR frame encoder/transmitter using manual 38 kHz GPIO carrier generation
+- `main/trotec_3550_ir.cpp`: Ströme AC YPS-12C/Trotec 3550-compatible IR frame encoder/transmitter using manual 38 kHz GPIO carrier generation
 - `main/app_priv.h`: Private headers and AC state definitions
 - `components/ds18b20/`: External DS18B20 1-Wire temperature sensor component
 
@@ -125,7 +125,7 @@ chip-tool thermostat write occupied-cooling-setpoint 2400 <node-id> 1  # 24.0°C
 
 ## IR Implementation
 
-The IR implementation is state-based, matching the Trotec 3550-compatible protocol used by the Sröme AC YPS-12C. Every accepted Matter write sends a complete 72-bit AC state frame on GPIO 21 with a manually generated 38 kHz carrier. The frame includes power, mode, temperature, fan speed, swing, Celsius unit flag, and checksum.
+The IR implementation is state-based, matching the Trotec 3550-compatible protocol used by the Ströme AC YPS-12C. Every accepted Matter write sends a complete 72-bit AC state frame on GPIO 21 with a manually generated 38 kHz carrier. The frame includes power, mode, temperature, fan speed, swing, Celsius unit flag, and checksum.
 
 RF switch control is configured at boot:
 - GPIO3 is driven low first to enable RF switch control.
@@ -152,9 +152,9 @@ The Matter `LocalTemperature` and Temperature Measurement values come from a DS1
 ### Logs
 Monitor ESP32 logs to see AC control commands:
 ```
-I (12345) app_driver: Sröme AC Power: ON
+I (12345) app_driver: Ströme AC Power: ON
 I (12346) trotec_3550_ir: TX state: power=on mode=3 fan=2 swing=0 temp=24.00C frame=...
-I (12347) app_driver: Sröme AC Mode: COOL
+I (12347) app_driver: Ströme AC Mode: COOL
 ```
 
 ### Matter Compatibility

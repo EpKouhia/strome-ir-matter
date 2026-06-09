@@ -88,10 +88,21 @@ When the device boots, you should see logs like:
 ```
 I (456) app_main: Room Air Conditioner IR bridge created with endpoint_id 1
 I (567) app_driver: DS18B20 local temperature sensor initialized on GPIO2
-I (670) app_driver: Sröme AC Power: ON
-I (671) app_driver: Sröme AC Mode: COOL
+I (670) app_driver: Ströme AC Power: ON
+I (671) app_driver: Ströme AC Mode: COOL
 I (672) app_driver: Temperature: 24.0°C
 ```
+
+If D1 / GPIO1 is held low during boot, startup continues and the device opens a Matter pairing window after Matter starts and GPIO1 is released:
+```
+I (xxx) app_main: Pairing mode button GPIO1 held low at boot; startup will continue
+I (xxx) app_main: Pairing mode button released; opening commissioning window
+I (xxx) app_main: Boot-requested pairing mode opened for 300 seconds
+```
+
+GPIO15 blinks while this boot-requested pairing window is open and turns off when commissioning completes or the window closes.
+
+After normal boot, holding D1 / GPIO1 for 15 seconds starts a Matter factory reset. GPIO15 fast-blinks five times, then the device reboots and returns to commissioning.
 
 ### Device Commissioning
 
@@ -126,11 +137,11 @@ chip-tool basicinformation read vendor-name 12345 0
 ```bash
 # Turn AC on
 chip-tool onoff on 12345 1
-# Expected log: I (xxx) app_driver: Sröme AC Power: ON
+# Expected log: I (xxx) app_driver: Ströme AC Power: ON
 
 # Turn AC off
 chip-tool onoff off 12345 1
-# Expected log: I (xxx) app_driver: Sröme AC Power: OFF
+# Expected log: I (xxx) app_driver: Ströme AC Power: OFF
 
 # Read power status
 chip-tool onoff read on-off 12345 1
@@ -140,11 +151,11 @@ chip-tool onoff read on-off 12345 1
 ```bash
 # Set off mode (SystemMode: Off=0)
 chip-tool thermostat write system-mode 0 12345 1
-# Expected log: I (xxx) app_driver: Sröme AC Mode: OFF
+# Expected log: I (xxx) app_driver: Ströme AC Mode: OFF
 
 # Set cooling mode (SystemMode: Cool=3)
 chip-tool thermostat write system-mode 3 12345 1
-# Expected log: I (xxx) app_driver: Sröme AC Mode: COOL
+# Expected log: I (xxx) app_driver: Ströme AC Mode: COOL
 
 # Unsupported modes are intentionally rejected in the first Room Air Conditioner phase.
 chip-tool thermostat write system-mode 7 12345 1
@@ -178,8 +189,8 @@ chip-tool thermostat write occupied-cooling-setpoint 2400 12345 1  # 24°C
 
 Expected log sequence:
 ```
-I (xxx) app_driver: Sröme AC Power: ON
-I (xxx) app_driver: Sröme AC Mode: COOL
+I (xxx) app_driver: Ströme AC Power: ON
+I (xxx) app_driver: Ströme AC Mode: COOL
 I (xxx) app_driver: Temperature: 24.0°C
 ```
 
@@ -214,8 +225,23 @@ chip-tool descriptor read server-list 12345 1
 
 1. **Add IR Hardware**: Connect the IR LED driver circuit to GPIO21
 2. **Add Local Temperature Sensor**: Connect DS18B20 data to GPIO2 with a 4.7 kOhm pull-up to 3.3 V
-3. **Capture IR Output**: Verify the emitted Trotec 3550 frames with an IR receiver or logic analyzer
-4. **Test with Real AC**: Verify the AC responds to power, Off/Cool mode, and temperature commands
+3. **Add Boot Pairing Button**: Connect D1 / GPIO1 through a momentary button to GND
+4. **Verify Pairing Indicator**: Hold GPIO1 low during boot, release it, and confirm GPIO15 blinks while the pairing window is open
+5. **Capture IR Output**: Verify the emitted Trotec 3550 frames with an IR receiver or logic analyzer
+6. **Test with Real AC**: Verify the AC responds to power, Off/Cool mode, and temperature commands
+
+### Boot Pairing Mode Regression
+
+```bash
+# Normal boot
+# Expected: GPIO15 stays off and no boot-requested pairing-window log appears.
+
+# Boot while holding D1 / GPIO1 to GND, then release after startup logs begin
+# Expected: GPIO15 blinks, the commissioning window opens for 300 seconds, and existing fabrics are not erased.
+
+# After normal boot, hold D1 / GPIO1 to GND for 15 seconds
+# Expected: GPIO15 fast-blinks five times, Matter commissioning data is reset, and the device reboots into commissioning.
+```
 
 ## Success Criteria
 

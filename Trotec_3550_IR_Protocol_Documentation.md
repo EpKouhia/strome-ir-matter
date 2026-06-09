@@ -1,4 +1,4 @@
-# Sröme AC YPS-12C / Trotec 3550 IR Protocol Documentation
+# Ströme AC YPS-12C / Trotec 3550 IR Protocol Documentation
 
 ## Table of Contents
 1. [Protocol Overview](#protocol-overview)
@@ -15,7 +15,7 @@
 
 ## Protocol Overview
 
-The **Sröme AC YPS-12C** uses a Trotec 3550-compatible proprietary IR protocol that is part of the IRremoteESP8266 library. This protocol uses **state-based commands** where the entire AC state is transmitted in each command, rather than individual parameter changes.
+The **Ströme AC YPS-12C** uses a Trotec 3550-compatible proprietary IR protocol that is part of the IRremoteESP8266 library. This protocol uses **state-based commands** where the entire AC state is transmitted in each command, rather than individual parameter changes.
 
 Protocol reference: [crankyoldgit/IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266), especially its Trotec 3550 encoder/decoder implementation.
 
@@ -32,7 +32,7 @@ Note: This protocol documentation is based on captured IR signals from the origi
 
 ### ESP32-C6 implementation note
 
-The earlier verified Sröme YPS-12C ESP32-C6 test project used manual GPIO carrier generation and sent each byte MSB-first. Some IRremoteESP8266 raw dumps describe the aggregate decoded value as LSB-first, but the AC was validated with the MSB-first byte transmission path used by this firmware.
+The earlier verified Ströme YPS-12C ESP32-C6 test project used manual GPIO carrier generation and sent each byte MSB-first. Some IRremoteESP8266 raw dumps describe the aggregate decoded value as LSB-first, but the AC was validated with the MSB-first byte transmission path used by this firmware.
 
 ---
 

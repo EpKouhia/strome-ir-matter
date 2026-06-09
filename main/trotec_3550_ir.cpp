@@ -132,7 +132,7 @@ esp_err_t trotec_3550_ir_init(void)
 
     s_gpio_initialized = true;
 
-    ESP_LOGI(TAG, "Sröme YPS-12C IR initialized on GPIO %d using manual 38kHz carrier",
+    ESP_LOGI(TAG, "Ströme YPS-12C IR initialized on GPIO %d using manual 38kHz carrier",
              static_cast<int>(kIrTxGpio));
     return ESP_OK;
 }
