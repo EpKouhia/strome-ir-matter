@@ -100,7 +100,7 @@ I (xxx) app_main: Pairing mode button released; opening commissioning window
 I (xxx) app_main: Boot-requested pairing mode opened for 300 seconds
 ```
 
-GPIO15 blinks while this boot-requested pairing window is open and turns off when commissioning completes or the window closes.
+GPIO15 blinks while this boot-requested pairing window is open and turns off when commissioning completes, fails, or the window closes.
 
 After normal boot, holding D1 / GPIO1 for 15 seconds starts a Matter factory reset. GPIO15 fast-blinks five times, then the device reboots and returns to commissioning.
 
@@ -225,8 +225,8 @@ chip-tool descriptor read server-list 12345 1
 
 1. **Add IR Hardware**: Connect the IR LED driver circuit to GPIO21
 2. **Add Local Temperature Sensor**: Connect DS18B20 data to GPIO2 with a 4.7 kOhm pull-up to 3.3 V
-3. **Add Boot Pairing Button**: Connect D1 / GPIO1 through a momentary button to GND
-4. **Verify Pairing Indicator**: Hold GPIO1 low during boot, release it, and confirm GPIO15 blinks while the pairing window is open
+3. **Add Pairing / Reset Button**: Connect a normally-open momentary button between D1 / GPIO1 and GND. The internal pull-up is enabled in firmware.
+4. **Verify Pairing Indicator**: Hold GPIO1 low during boot, release it after startup begins, and confirm GPIO15 blinks while the pairing window is open
 5. **Capture IR Output**: Verify the emitted Trotec 3550 frames with an IR receiver or logic analyzer
 6. **Test with Real AC**: Verify the AC responds to power, Off/Cool mode, and temperature commands
 
@@ -241,6 +241,9 @@ chip-tool descriptor read server-list 12345 1
 
 # After normal boot, hold D1 / GPIO1 to GND for 15 seconds
 # Expected: GPIO15 fast-blinks five times, Matter commissioning data is reset, and the device reboots into commissioning.
+
+# Stuck-button check
+# Expected: if GPIO1 remains low for 30 seconds during boot pairing, startup continues and the commissioning window opens once.
 ```
 
 ## Success Criteria

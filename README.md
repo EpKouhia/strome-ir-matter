@@ -53,7 +53,7 @@ flowchart LR
         IR_LED["940 nm IR LED"]
     end
 
-    subgraph PAIR["Boot Pairing Button"]
+    subgraph PAIR["Pairing / Reset Button"]
         P_BTN["Momentary button"]
     end
 
@@ -78,7 +78,7 @@ flowchart LR
 
 | XIAO pin | ESP32-C6 GPIO | Connected hardware | Notes |
 |----------|---------------|--------------------|-------|
-| D1 | GPIO1 | Boot pairing button to GND | Active-low, internal pull-up enabled |
+| D1 | GPIO1 | Pairing / reset button to GND | Active-low, internal pull-up enabled; no external pull-up required |
 | D2 | GPIO2 | DS18B20 DQ | Add 4.7 kOhm pull-up to 3.3 V |
 | D3 | GPIO21 | IR transmitter driver input | Manual 38 kHz carrier output |
 | Onboard user LED | GPIO15 | Pairing mode indicator | Blinks while boot-requested Matter commissioning window is open |
@@ -87,11 +87,20 @@ flowchart LR
 | RF switch power | GPIO3 | XIAO RF switch control | Driven low before selecting antenna |
 | RF switch select | GPIO14 | XIAO RF switch select | Driven high for external antenna |
 
-## Boot Pairing Mode
+## Pairing / Reset Button
 
-Hold the D1 / GPIO1 button low during boot, then release it after startup logs begin. Startup continues while the button is held, and after Matter starts the firmware opens a Matter basic commissioning window for 300 seconds once GPIO1 is released. If GPIO1 stays held for 30 seconds, the firmware opens the commissioning window once anyway. This does not erase existing fabrics. GPIO15 blinks while this boot-requested pairing window is active, then turns off when commissioning completes, fails, or the window closes.
+Add a normally-open momentary button between D1 / GPIO1 and GND. The firmware enables the ESP32-C6 internal pull-up, so the pin is normally high and becomes active when the button pulls it low.
 
-After normal boot, holding the same GPIO1 button for 15 seconds factory-resets the Matter commissioning data. GPIO15 fast-blinks five times to confirm the reset request, then the ESP-Matter reset flow reboots the device into a fresh commissioning state.
+There are two supported gestures:
+
+| Gesture | Result | Existing Matter fabrics |
+|---------|--------|-------------------------|
+| Hold GPIO1 low during boot, then release after startup begins | Opens a Matter basic commissioning window for 300 seconds | Preserved |
+| Hold GPIO1 low for 15 seconds after normal boot | Factory-resets Matter commissioning data, fast-blinks GPIO15 five times, then reboots | Removed |
+
+Boot pairing is non-blocking: startup continues while the button is held. After Matter starts, the firmware waits for GPIO1 to be released before opening the commissioning window. If the button stays held for 30 seconds, the firmware opens the commissioning window once anyway so a stuck button does not permanently block pairing.
+
+GPIO15, the onboard user LED, blinks while the boot-requested commissioning window is open. It turns off when commissioning completes, fails, or the window closes. The reset gesture uses five fast LED blinks before the reset flow continues.
 
 ## Included Components
 
