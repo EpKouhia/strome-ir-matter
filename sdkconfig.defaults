@@ -46,8 +46,10 @@ CONFIG_BUTTON_LONG_PRESS_TIME_MS=5000
 # Disable SoftAP by default (valid symbol in ESP-IDF)
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 
-# Enable OTA Requestor
-CONFIG_ENABLE_OTA_REQUESTOR=y
+# Disable OTA Requestor. Basic Information still reports firmware version; without
+# a configured OTA provider, the OTA Requestor only creates a controller-side
+# firmware/update entity that stays Unknown.
+CONFIG_ENABLE_OTA_REQUESTOR=n
 
 # Enable HKDF in mbedtls
 CONFIG_MBEDTLS_HKDF_C=y

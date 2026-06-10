@@ -19,7 +19,6 @@
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
-#include <esp_matter_ota.h>
 #include <esp_matter_providers.h>
 #include <crypto/CHIPCryptoPAL.h>
 #include <lib/core/CHIPError.h>
@@ -103,11 +102,13 @@ static char s_empty_string[] = "";
 static char s_vendor_name[] = "Ströme";
 static char s_product_name[] = "Ströme AC";
 static char s_model_name[] = "YPS-12C";
+static char s_software_version_string[] = "1.0";
 static char s_product_url[] = "https://github.com/EpKouhia/strome-ir-matter";
 static char s_serial_number[] = "strome-ir-matter-dev";
 static constexpr uint32_t kVendorId = 0xFFF1;  // CSA test VID used with development attestation.
 static constexpr uint32_t kProductId = 0x8000; // Development PID from sdkconfig.
 static constexpr uint32_t kHardwareVersion = 1;
+static constexpr uint32_t kSoftwareVersion = 1;
 static constexpr uint32_t kSetupPasscodeBase = 10000000;
 static constexpr uint32_t kSetupPasscodeRange = 89999999;
 static constexpr uint32_t kSpake2pIterationCount = 1000;
@@ -665,6 +666,10 @@ static void add_root_compatibility_attributes(endpoint_t *root_endpoint)
                                        s_product_name);
         set_or_create_string_attribute(basic_information_cluster, BasicInformation::Attributes::HardwareVersionString::Id,
                                        s_model_name);
+        create_or_replace_attribute(basic_information_cluster, BasicInformation::Attributes::SoftwareVersion::Id,
+                                    ATTRIBUTE_FLAG_NONE, esp_matter_uint32(kSoftwareVersion));
+        set_or_create_string_attribute(basic_information_cluster, BasicInformation::Attributes::SoftwareVersionString::Id,
+                                       s_software_version_string);
         set_or_create_string_attribute(basic_information_cluster, BasicInformation::Attributes::ProductLabel::Id,
                                        s_model_name);
         set_or_create_string_attribute(basic_information_cluster, BasicInformation::Attributes::PartNumber::Id,
@@ -754,6 +759,7 @@ static void add_thermostat_compatibility_clusters(endpoint_t *endpoint)
                                     ATTRIBUTE_FLAG_NONE, esp_matter_enum8(0));
         create_or_replace_attribute(thermostat_cluster, Thermostat::Attributes::SetpointChangeAmount::Id,
                                     ATTRIBUTE_FLAG_NULLABLE, esp_matter_nullable_int16(nullable<int16_t>()));
+
     }
 
     if (!cluster::get(endpoint, TemperatureMeasurement::Id)) {
@@ -779,6 +785,41 @@ static void add_thermostat_compatibility_clusters(endpoint_t *endpoint)
         } else {
             ESP_LOGE(TAG, "Failed to add Thermostat UI Configuration cluster to Thermostat endpoint");
         }
+    }
+}
+
+static void add_fan_control_cluster(endpoint_t *endpoint)
+{
+    cluster::fan_control::config_t fan_config;
+    fan_config.fan_mode = DEFAULT_FAN_SPEED;
+    fan_config.fan_mode_sequence = 0; // OffLowMedHigh.
+    fan_config.percent_setting = nullable<uint8_t>(66);
+    fan_config.percent_current = 66;
+
+    cluster_t *fan_cluster = cluster::fan_control::create(endpoint, &fan_config, CLUSTER_FLAG_SERVER);
+    if (fan_cluster) {
+        cluster::fan_control::feature::multi_speed::config_t multi_speed_config;
+        multi_speed_config.speed_max = 3;
+        multi_speed_config.speed_setting = nullable<uint8_t>(DEFAULT_FAN_SPEED);
+        multi_speed_config.speed_current = DEFAULT_FAN_SPEED;
+        esp_err_t err = cluster::fan_control::feature::multi_speed::add(fan_cluster, &multi_speed_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add Fan Control MultiSpeed feature, err=%d", err);
+            return;
+        }
+
+        cluster::fan_control::feature::rocking::config_t rocking_config;
+        rocking_config.rock_support = FAN_SWING_UP_DOWN;
+        rocking_config.rock_setting = DEFAULT_FAN_SWING ? FAN_SWING_UP_DOWN : 0;
+        err = cluster::fan_control::feature::rocking::add(fan_cluster, &rocking_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add Fan Control Rocking feature, err=%d", err);
+            return;
+        }
+
+        ESP_LOGI(TAG, "Added Fan Control cluster with MultiSpeed SpeedMax=3 and Rocking support");
+    } else {
+        ESP_LOGE(TAG, "Failed to add Fan Control cluster");
     }
 }
 
@@ -927,7 +968,8 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
     if (type == PRE_UPDATE) {
         err = app_driver_attribute_update(driver_handle, endpoint_id, cluster_id, attribute_id, val);
         app_driver_note_pre_update_result(endpoint_id, cluster_id, attribute_id, err);
-    } else if (type == POST_UPDATE && (cluster_id == Thermostat::Id || cluster_id == OnOff::Id) &&
+    } else if (type == POST_UPDATE &&
+               (cluster_id == Thermostat::Id || cluster_id == OnOff::Id || cluster_id == FanControl::Id) &&
                !app_driver_was_pre_update_handled(endpoint_id, cluster_id, attribute_id)) {
         ESP_LOGI(TAG, "Handling AC attribute from POST_UPDATE fallback");
         err = app_driver_attribute_update(driver_handle, endpoint_id, cluster_id, attribute_id, val);
@@ -944,7 +986,7 @@ extern "C" void app_main()
     ESP_LOGI(TAG, "📱 Ströme AC Controller - Version 1.0");
     ESP_LOGI(TAG, "🏷️ Model: YPS-12C");
     ESP_LOGI(TAG, "🏠 Device Type: Room Air Conditioner (Always-On IR AC bridge)");
-    ESP_LOGI(TAG, "⚙️ Features: Power, Cool/Off mode, Temperature setpoint");
+    ESP_LOGI(TAG, "⚙️ Features: Power, Cool/Fan/Dry mode, Temperature setpoint, Fan speed, Swing");
     ESP_LOGI(TAG, "🔌 Power Type: Mains-Powered (No ICD/Battery Management Required)");
     ESP_LOGI(TAG, "🚫 ICD Server: Disabled - always-on device");
 
@@ -982,17 +1024,25 @@ extern "C" void app_main()
     esp_matter::endpoint::room_air_conditioner::config_t ac_config = {};
     ac_config.on_off.on_off = DEFAULT_POWER;
     ac_config.thermostat.local_temperature = nullable<int16_t>(kInitialLocalTemperature);
-    ac_config.thermostat.feature_flags = cluster::thermostat::feature::cooling::get_id();
-    ac_config.thermostat.control_sequence_of_operation = 0; // Cooling only
+    ac_config.thermostat.feature_flags =
+        cluster::thermostat::feature::cooling::get_id() | cluster::thermostat::feature::heating::get_id();
+    /*
+     * Home Assistant exposes only Off/Cool when this is CoolingOnly. Advertise
+     * CoolingAndHeating and remap Heat to the AC dry mode in the driver. The
+     * physical AC still has no heating support.
+     */
+    ac_config.thermostat.control_sequence_of_operation = 4; // CoolingAndHeating.
     ac_config.thermostat.system_mode = DEFAULT_AC_MODE;
     ac_config.thermostat.features.cooling.occupied_cooling_setpoint = DEFAULT_TEMPERATURE;
+    ac_config.thermostat.features.heating.occupied_heating_setpoint = DEFAULT_TEMPERATURE;
 
     endpoint_t *endpoint = esp_matter::endpoint::room_air_conditioner::create(node, &ac_config, ENDPOINT_FLAG_NONE,
                                                                               room_air_conditioner_handle);
     ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create Room Air Conditioner endpoint"));
-    add_thermostat_compatibility_clusters(endpoint);
-
     room_air_conditioner_endpoint_id = endpoint::get_id(endpoint);
+    add_thermostat_compatibility_clusters(endpoint);
+    add_fan_control_cluster(endpoint);
+
     ESP_LOGI(TAG, "Room Air Conditioner IR bridge created with endpoint_id %d", room_air_conditioner_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
