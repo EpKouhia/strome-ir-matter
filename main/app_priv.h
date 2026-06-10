@@ -22,7 +22,7 @@
 #define MAX_TEMPERATURE 3000      // 30.0°C (Trotec 3550 protocol limit)
 #define DEFAULT_FAN_SPEED 2       // Medium IR fan speed
 #define DEFAULT_AC_MODE 3         // Cool mode (Matter SystemMode::kCool)
-#define DEFAULT_FAN_SWING false   // IR fan swing off, not exposed over Matter
+#define DEFAULT_FAN_SWING false   // IR vertical swing off by default (FanControl Rocking disabled)
 #define FAN_SWING_UP_DOWN 0x02    // Native IR swing flag
 #define DS18B20_GPIO 2            // External local-temperature sensor data pin
 #define DS18B20_UPDATE_INTERVAL_MS 10000
