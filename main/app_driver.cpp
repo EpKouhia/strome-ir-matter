@@ -264,6 +264,7 @@ static void report_attribute_without_callbacks(uint16_t endpoint_id, uint32_t cl
 {
     attribute_t *attribute = attribute::get(endpoint_id, cluster_id, attribute_id);
     if (attribute) {
+        attribute::set_val(attribute, val, false);
         attribute::report(endpoint_id, cluster_id, attribute_id, val);
     }
 }
