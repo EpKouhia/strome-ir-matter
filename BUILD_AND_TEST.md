@@ -90,7 +90,7 @@ I (456) app_main: Room Air Conditioner IR bridge created with endpoint_id 1
 I (567) app_driver: DS18B20 local temperature sensor initialized on GPIO2
 I (670) app_driver: Ströme AC Power: ON
 I (671) app_driver: Ströme AC Mode: COOL
-I (672) app_driver: Temperature: 24.0°C
+I (672) app_driver: Temperature: 22.0°C
 ```
 
 If D1 / GPIO1 is held low during boot, startup continues and the device opens a Matter pairing window after Matter starts and GPIO1 is released:
@@ -105,6 +105,8 @@ GPIO15 blinks while this boot-requested pairing window is open and turns off whe
 After normal boot, holding D1 / GPIO1 for 15 seconds starts a Matter factory reset. GPIO15 fast-blinks five times, then the device reboots and returns to commissioning.
 
 ### Device Commissioning
+
+If the Matter endpoint layout changed since the last flash, remove the old device from the controller and recommission it. Controllers commonly cache device types, endpoints, and server clusters, so added or removed clusters may not appear after a normal firmware update alone.
 
 #### 1. Install chip-tool (Matter Commissioner)
 The chip-tool should be built as part of the ESP-Matter installation:
@@ -149,18 +151,21 @@ chip-tool onoff read on-off 12345 1
 
 #### Test 2: Mode Control
 ```bash
-# Set off mode (SystemMode: Off=0)
-chip-tool thermostat write system-mode 0 12345 1
-# Expected log: I (xxx) app_driver: Ströme AC Mode: OFF
-
 # Set cooling mode (SystemMode: Cool=3)
 chip-tool thermostat write system-mode 3 12345 1
 # Expected log: I (xxx) app_driver: Ströme AC Mode: COOL
 
-# Unsupported modes are intentionally rejected in the first Room Air Conditioner phase.
-chip-tool thermostat write system-mode 7 12345 1
-chip-tool thermostat write system-mode 8 12345 1
-# Expected log: W (xxx) app_driver: Rejected unsupported AC mode
+# Set fan-only mode through HA compatibility mapping (SystemMode: Off=0)
+chip-tool thermostat write system-mode 0 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Mode: FAN
+
+# Set dry/dehumidify mode through HA compatibility mapping (SystemMode: Heat=4)
+chip-tool thermostat write system-mode 4 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Mode: DEHUMIDIFY
+
+# Actual power off is handled by the OnOff cluster, not Thermostat SystemMode.
+chip-tool onoff off 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Power: OFF
 ```
 
 #### Test 3: Temperature Control
@@ -176,22 +181,68 @@ chip-tool thermostat write occupied-cooling-setpoint 2600 12345 1
 # Expected log: I (xxx) app_driver: Temperature: 26.0°C
 ```
 
-#### Fan Speed and Swing
-Fan speed and swing are not exposed in this first Room Air Conditioner phase. Verify that the server list does not include Fan Control (`0x0202`). These controls are planned for a follow-up after the minimal AC endpoint is stable.
+#### Test 4: Fan Speed Control
+Fan speed is exposed through the Fan Control cluster with Matter MultiSpeed. Low/Medium/High map directly to the native IR fan speed values 1/2/3.
+
+```bash
+# Set fan speed to Low
+chip-tool fancontrol write fan-mode 1 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Fan: ON speed=LOW (1)
+
+# Set fan speed to Medium
+chip-tool fancontrol write fan-mode 2 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Fan: ON speed=MEDIUM (2)
+
+# Set fan speed to High
+chip-tool fancontrol write fan-mode 3 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Fan: ON speed=HIGH (3)
+
+# Set fan speed through MultiSpeed
+chip-tool fancontrol write speed-setting 2 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Fan: ON speed=MEDIUM (2)
+
+# PercentSetting is also accepted:
+# 1..33 = Low, 34..66 = Medium, 67..100 = High
+chip-tool fancontrol write percent-setting 90 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Fan: ON speed=HIGH (3)
+
+# Fan off powers the AC off
+chip-tool fancontrol write speed-setting 0 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Fan: OFF speed=HIGH (3)
+```
+
+Fan Control `Auto`, `Smart`, wind, airflow-direction, and round/left-right rocking controls are intentionally unsupported.
+
+#### Test 5: Swing Control
+Vertical swing is exposed through the Fan Control Rocking feature. Matter calls this `RockUpDown`; the firmware maps that one bit to the AC remote's vertical swing flag. The AC supports `RockSupport=0x02` and accepts `RockSetting=0x00` or `RockSetting=0x02` only.
+
+```bash
+# Enable vertical swing
+chip-tool fancontrol write rock-setting 2 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Swing: ON
+
+# Disable vertical swing
+chip-tool fancontrol write rock-setting 0 12345 1
+# Expected log: I (xxx) app_driver: Ströme AC Swing: OFF
+
+# Unsupported rocking bits are rejected
+chip-tool fancontrol write rock-setting 1 12345 1
+# Expected log: W (xxx) app_driver: Rejected unsupported Fan RockSetting
+```
 
 ### Complete AC Setup Test
 ```bash
 # Full AC configuration sequence
 chip-tool onoff on 12345 1                                      # Power ON
 chip-tool thermostat write system-mode 3 12345 1                # Cooling mode
-chip-tool thermostat write occupied-cooling-setpoint 2400 12345 1  # 24°C
+chip-tool thermostat write occupied-cooling-setpoint 2200 12345 1  # 22°C
 ```
 
 Expected log sequence:
 ```
 I (xxx) app_driver: Ströme AC Power: ON
 I (xxx) app_driver: Ströme AC Mode: COOL
-I (xxx) app_driver: Temperature: 24.0°C
+I (xxx) app_driver: Temperature: 22.0°C
 ```
 
 ## Troubleshooting
@@ -205,8 +256,9 @@ I (xxx) app_driver: Temperature: 24.0°C
 ### Runtime Issues
 1. **Device not booting**: Check serial connection and baud rate (115200)
 2. **Commissioning fails**: Verify the Thread operational dataset, QR code/pairing info, and that the previous failed fabric was removed from the controller
-3. **Commands not working**: Check node ID and endpoint number (usually 1 after recommissioning)
-4. **No logs**: Ensure log level is set to INFO or DEBUG
+3. **New controls missing after flashing**: Remove the old Matter device from the controller and recommission so the endpoint and cluster layout is rediscovered
+4. **Commands not working**: Check node ID and endpoint number (usually 1 after recommissioning)
+5. **No logs**: Ensure log level is set to INFO or DEBUG
 
 ### Verification Commands
 ```bash
@@ -216,8 +268,9 @@ chip-tool descriptor read server-list 12345 1
 # Should show clusters:
 # - 0x0006 (OnOff)
 # - 0x0201 (Thermostat)
+# - 0x0202 (Fan Control)
 # - 0x001D (Descriptor)
-# It should not show 0x0202 (Fan Control) in the first Room Air Conditioner phase.
+# Fan Control should expose SpeedMax=3, SpeedSetting, SpeedCurrent, RockSupport=2, and RockSetting.
 # It should not show 0x0046 (ICD Management) for this always-on controller.
 ```
 
@@ -228,7 +281,7 @@ chip-tool descriptor read server-list 12345 1
 3. **Add Pairing / Reset Button**: Connect a normally-open momentary button between D1 / GPIO1 and GND. The internal pull-up is enabled in firmware.
 4. **Verify Pairing Indicator**: Hold GPIO1 low during boot, release it after startup begins, and confirm GPIO15 blinks while the pairing window is open
 5. **Capture IR Output**: Verify the emitted Trotec 3550 frames with an IR receiver or logic analyzer
-6. **Test with Real AC**: Verify the AC responds to power, Off/Cool mode, and temperature commands
+6. **Test with Real AC**: Verify the AC responds to power, Cool/Fan/Dry mode, fan speed, and temperature commands
 
 ### Boot Pairing Mode Regression
 

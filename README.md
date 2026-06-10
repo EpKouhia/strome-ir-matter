@@ -2,26 +2,110 @@
 
 Matter-compatible IR controller for the Ströme AC YPS-12C using Seeed Studio XIAO ESP32-C6 and ESP-Matter.
 
-The device exposes a Matter Room Air Conditioner endpoint and transmits Trotec 3550-compatible IR state frames for power, mode, and cooling setpoint changes. Because the AC does not report state back over IR, the Matter AC state is optimistic. Local temperature is reported from a DS18B20 external temperature sensor on GPIO2, with a 20.0 C fallback until a valid sensor reading is available.
+The device exposes a Matter Room Air Conditioner endpoint and transmits Trotec 3550-compatible IR state frames for power, mode, fan speed, swing, and cooling setpoint changes. Because the AC does not report state back over IR, the Matter AC state is optimistic. Local temperature is reported from a DS18B20 external temperature sensor on GPIO2, with a 20.0 C fallback until a valid sensor reading is available.
 
 Note: This project is still a work in progress. Some parts of the code and documentation have been refactored with AI assistance.
 
 ## TODO
 
-- Swing control
 - Timer control
-- Fan speed control
-- Addition of Dry and Fan modes
+
+## Matter Control Notes
+
+Minimum Matter protocol target: **Matter 1.2**. The implementation uses the official Room Air Conditioner device type (`0x0072`), plus Thermostat, OnOff, Fan Control, and Temperature Measurement clusters. Controllers with Matter 1.2 or newer support are the intended target; older Matter 1.0/1.1 controllers may not recognize the Room Air Conditioner device type correctly.
+
+Power-off is handled through the Room Air Conditioner `OnOff` cluster. Thermostat `SystemMode=Off` is not used for power-off in the Home Assistant compatibility mapping.
+
+For Home Assistant climate-mode usability, Thermostat `SystemMode` is intentionally remapped: `Cool` means AC cooling, `Off` means AC fan-only, and `Heat` means AC dry/dehumidify. The Thermostat heating feature is advertised only to make this UI mapping possible; the physical AC still has no heating support.
+
+### System Mode Mapping
+
+Home Assistant and many Matter controllers label Thermostat `SystemMode` values using generic thermostat names. In this firmware those labels are intentionally reused as Ströme AC mode controls:
+
+| Controller label | Matter `SystemMode` | Ströme AC mode | Actual behavior |
+|------------------|---------------------|----------------|-----------------|
+| Off | `0` | Fan | Turns the AC on in fan-only mode. This does **not** power off the device. |
+| Cool | `3` | Cool | Turns the AC on in cooling mode and uses the configured temperature setpoint. |
+| Heat | `4` | Dry | Turns the AC on in dry/dehumidify mode. The physical AC does **not** heat. |
+
+Actual whole-device power off is always handled through the separate Power / OnOff control, or through Fan Control off/zero values.
+
+The Matter `FanControl` cluster still includes a standard Off state. The physical AC cannot run cooling with its fan disabled, so Fan Control Off, `SpeedSetting=0`, and `PercentSetting=0` are treated as AC power-off aliases and mapped to `OnOff=false`.
+
+### Rocking / Swing Mapping
+
+Matter represents oscillating fan movement through the Fan Control **Rocking** feature. For this AC, that maps to the remote's vertical swing flag:
+
+| Matter Fan Control attribute | Supported value | Ströme AC behavior |
+|------------------------------|-----------------|--------------------|
+| `RockSupport` | `0x02` / `RockUpDown` | Advertises vertical swing support only. |
+| `RockSetting=0x00` | Off | Sends the next IR frame with vertical swing disabled. |
+| `RockSetting=0x02` | Up/down rocking | Sends the next IR frame with vertical swing enabled. |
+
+Other rocking directions, such as round or left/right rocking, are not supported by the documented IR payload and are rejected by the firmware.
+
+Internally there is one AC state machine. OnOff, Thermostat SystemMode, and Fan Control writes all converge into the same stored power/mode/fan state before one complete IR frame is sent. Some controllers, including Home Assistant, may render these clusters as separate entities even though they belong to the same Room Air Conditioner endpoint.
+
+## Matter And Controller Limitations
+
+Matter exposes AC behavior through separate standard clusters rather than one app-specific control surface. A controller decides how to render those clusters, and that UI may not match the firmware's internal state model exactly.
+
+Known limitations and controller behaviors:
+
+- Home Assistant may render the same Room Air Conditioner endpoint as separate climate, fan, power, and sensor entities because `Thermostat`, `FanControl`, `OnOff`, and `TemperatureMeasurement` are separate Matter clusters.
+- Home Assistant's climate mode picker is mapped for usability rather than strict semantic correctness: Off = Fan, Heat = Dry, Cool = Cool. The separate Power entity is the actual AC off/on control.
+- The AC has no IR feedback path. If the original remote is used, or if an IR frame is missed, Matter state can drift from the real AC until the next command is sent.
+- Fan Control includes standard off/zero values. This AC cannot cool with fan disabled, so those values are interpreted as whole-device power off.
+- Fan speed and swing may appear as a separate fan entity in Home Assistant. That is a controller presentation choice; in firmware they still update the same AC state and emit one full IR frame.
+- Timer support is intentionally not exposed yet.
+
+## Matter Cluster Structure
+
+The firmware exposes one main Room Air Conditioner endpoint. The AC is controlled optimistically: every accepted Matter write updates the stored state and sends one complete Trotec 3550-compatible IR frame.
+
+| Endpoint | Device type | Server clusters | Purpose |
+|----------|-------------|-----------------|---------|
+| 0 | Root Node | Descriptor, Basic Information, Access Control, General Commissioning, Network Commissioning, Operational Credentials, compatibility ICD Management shim | Standard Matter node management, commissioning, product metadata, and networking |
+| 1 | Room Air Conditioner (`0x0072`) | Descriptor, Identify, OnOff, Thermostat, Fan Control, Temperature Measurement, Thermostat UI Configuration | User-facing AC controls and local temperature reporting |
+
+Endpoint 1 cluster behavior:
+
+| Cluster | ID | Main attributes used | Firmware mapping |
+|---------|----|----------------------|------------------|
+| OnOff | `0x0006` | `OnOff` | Main power control. `false` sends an IR frame with power off; `true` powers on using the last selected active mode. |
+| Thermostat | `0x0201` | `SystemMode`, `OccupiedCoolingSetpoint`, `LocalTemperature`, running-state attributes | Home Assistant compatibility mapping: Off = Fan, Heat = Dry, Cool = Cool. Setpoint writes update the stored cooling temperature. Local temperature is updated from the DS18B20 sensor. |
+| Fan Control | `0x0202` | `FanMode`, `PercentSetting`, `PercentCurrent`, `SpeedMax=3`, `SpeedSetting`, `SpeedCurrent`, `RockSupport=0x02`, `RockSetting` | MultiSpeed fan control for Low, Medium, and High. Rocking `RockUpDown` maps to vertical swing. Zero/off values are treated as AC power-off aliases. |
+| Temperature Measurement | `0x0402` | `MeasuredValue`, min/max measured values | Mirrors the DS18B20 local room temperature for controllers that prefer a sensor cluster. |
+| Thermostat UI Configuration | `0x0204` | UI metadata | Basic thermostat display metadata for controller compatibility. |
+| Identify | `0x0003` | Identify state | Standard Matter identify support. |
 
 ## Home Assistant Matter Device
 
-These screenshots show the added Matter device in Home Assistant. The detailed view exposes the measured local temperature, cooling setpoint, and Cool mode control.
+These screenshots show the added Matter device in Home Assistant. Home Assistant renders the single Matter Room Air Conditioner endpoint as several UI surfaces because the endpoint exposes multiple standard clusters:
 
-![Ströme AC Home Assistant detail view](<docs/Screenshot 2026-06-08 202114.png>)
+- **AC / climate control** from the Thermostat cluster.
+- **Power** from the OnOff cluster.
+- **Fan speed and oscillation** from the Fan Control cluster.
 
-The area card shows the same Matter device as a compact room control.
+The device overview shows those controls grouped under one Matter device. `Power` is the actual on/off control, `YPS-12C` is the climate entity, and the fan entity controls speed plus oscillation/rocking.
 
-![Ströme AC Home Assistant area card](<docs/Screenshot 2026-06-08 202146.png>)
+![Home Assistant Matter device overview](<docs/Screenshot 2026-06-10 204950.png>)
+
+The dashboard view shows the same split: climate and fan cards in the climate area, with the OnOff power control rendered separately.
+
+![Home Assistant dashboard cards](<docs/Screenshot 2026-06-10 205022.png>)
+
+The climate detail view exposes current temperature, cooling setpoint, and the remapped system modes. In this firmware, `Cool` means cooling, `Off` means fan-only, and `Heat` means dry/dehumidify.
+
+![Home Assistant climate detail with mode menu](<docs/Screenshot 2026-06-10 205038.png>)
+
+The fan detail view exposes Matter Fan Control. Low/Medium/High map to native fan speeds 1/2/3. The `Oscillating` control is Matter Rocking: `No` maps to `RockSetting=0x00`, and `Yes` maps to `RockSetting=0x02` / vertical swing.
+
+![Home Assistant fan control and oscillation](<docs/Screenshot 2026-06-10 205057.png>)
+
+The power detail view is the OnOff cluster. Use this to turn the AC fully off or back on.
+
+![Home Assistant power control](<docs/Screenshot 2026-06-10 205123.png>)
 
 ## Hardware Wiring
 
@@ -90,6 +174,8 @@ flowchart LR
 ## Pairing / Reset Button
 
 Add a normally-open momentary button between D1 / GPIO1 and GND. The firmware enables the ESP32-C6 internal pull-up, so the pin is normally high and becomes active when the button pulls it low.
+
+After firmware changes that alter the Matter data model, remove the old device from the Matter controller and recommission it. Controllers often cache endpoint and cluster layouts, so newly added or removed clusters may not appear correctly after flashing alone.
 
 There are two supported gestures:
 

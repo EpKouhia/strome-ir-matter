@@ -51,9 +51,33 @@ Known reserved bits are preserved from IRremoteESP8266's Trotec 3550 reset frame
 ## Matter Mapping
 
 - **OnOff cluster** sends power on/off while preserving the rest of the AC state.
-- **Thermostat SystemMode** currently accepts Off and Cool only.
+- **Thermostat SystemMode** uses a Home Assistant compatibility mapping: Off means AC fan-only, Cool means AC cooling, and Heat means AC dry/dehumidify. Actual AC power off is handled by the OnOff cluster.
 - **OccupiedCoolingSetpoint** accepts 16.00 C to 30.00 C.
-- Fan speed, fan-only mode, dry mode, and vertical swing are present in the IR payload but not exposed over Matter in the current minimal Room Air Conditioner phase.
+- **FanControl** exposes Low/Medium/High through `FanMode`, `SpeedSetting`, and `PercentSetting`.
+- **FanControl Rocking** exposes vertical swing through the Matter `RockUpDown` bit.
+- All accepted Matter writes update the stored AC state and send one complete IR frame. The AC does not report state back over IR, so Matter state is optimistic.
+
+### System Mode To IR Mode
+
+| Controller label | Matter `SystemMode` | Native IR mode | Ströme AC behavior |
+|------------------|---------------------|----------------|--------------------|
+| Off | `0` | `AC_MODE_FAN` / `7` | Fan-only mode with AC power on |
+| Cool | `3` | `AC_MODE_COOL` / `3` | Cooling mode with AC power on |
+| Heat | `4` | `AC_MODE_DEHUMIDIFY` / `8` | Dry/dehumidify mode with AC power on |
+
+The IR off state is separate: it is sent only when the Matter OnOff cluster is set to `false`, or when Fan Control is written to an off/zero value.
+
+### Rocking To IR Swing
+
+Matter calls fan oscillation **Rocking**. The Ströme/Trotec IR payload has one documented swing bit, so the firmware maps only the up/down rocking bit to the native vertical swing flag:
+
+| Matter Fan Control value | Native IR state | Behavior |
+|--------------------------|-----------------|----------|
+| `RockSupport=0x02` | Vertical swing capability | Advertises only `RockUpDown` support. |
+| `RockSetting=0x00` | Swing off | Sends `swing=0` in the next complete IR frame. |
+| `RockSetting=0x02` | Swing on | Sends `swing=1` in the next complete IR frame. |
+
+Any other `RockSetting` bit is rejected. The physical protocol documentation does not include separate left/right or round rocking controls.
 
 ## Testing
 

@@ -17,22 +17,22 @@
 
 /** Default attribute values used during initialization */
 #define DEFAULT_POWER true
-#define DEFAULT_TEMPERATURE 2400  // 24.0°C (in 0.01°C units)
+#define DEFAULT_TEMPERATURE 2200  // 22.0°C (in 0.01°C units)
 #define MIN_TEMPERATURE 1600      // 16.0°C
 #define MAX_TEMPERATURE 3000      // 30.0°C (Trotec 3550 protocol limit)
-#define DEFAULT_FAN_SPEED 2       // Medium IR fan speed, not exposed over Matter
+#define DEFAULT_FAN_SPEED 2       // Medium IR fan speed
 #define DEFAULT_AC_MODE 3         // Cool mode (Matter SystemMode::kCool)
-#define DEFAULT_FAN_SWING false   // IR fan swing off, not exposed over Matter
+#define DEFAULT_FAN_SWING false   // IR vertical swing off by default (FanControl Rocking disabled)
 #define FAN_SWING_UP_DOWN 0x02    // Native IR swing flag
 #define DS18B20_GPIO 2            // External local-temperature sensor data pin
 #define DS18B20_UPDATE_INTERVAL_MS 10000
 
 /** AC Mode definitions */
 typedef enum {
-    AC_MODE_OFF = 0,         // Thermostat::SystemMode::kOff
+    AC_MODE_OFF = 0,         // Internal power-off state. Thermostat Off is remapped to AC_MODE_FAN.
     AC_MODE_COOL = 3,        // Thermostat::SystemMode::kCool
-    AC_MODE_FAN = 7,         // Supported by IR encoder, not exposed over Matter
-    AC_MODE_DEHUMIDIFY = 8   // Supported by IR encoder, not exposed over Matter
+    AC_MODE_FAN = 7,         // Thermostat::SystemMode::kFanOnly
+    AC_MODE_DEHUMIDIFY = 8   // Thermostat Heat is remapped to this mode for Home Assistant compatibility.
 } ac_mode_t;
 
 /** Fan Speed definitions */
